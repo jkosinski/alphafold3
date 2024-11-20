@@ -13,7 +13,11 @@ we recommend running with at least 64 GB of RAM.
 
 We provide installation instructions for a machine with an NVIDIA A100 80 GB GPU
 and a clean Ubuntu 22.04 LTS installation, and expect that these instructions
-should aid others with different setups.
+should aid others with different setups. If you are installing locally outside
+of a Docker container, please ensure CUDA, cuDNN, and JAX are correctly
+installed; the
+[JAX installation documentation](https://jax.readthedocs.io/en/latest/installation.html#nvidia-gpu)
+is a useful reference for this case.
 
 The instructions provided below describe how to:
 
@@ -186,7 +190,7 @@ git clone https://github.com/google-deepmind/alphafold3.git
 
 ## Obtaining Genetic Databases
 
-This step requires `curl` and `zstd` to be installed on your machine.
+This step requires `wget` and `zstd` to be installed on your machine.
 
 AlphaFold 3 needs multiple genetic (sequence) protein and RNA databases to run:
 
@@ -200,20 +204,20 @@ AlphaFold 3 needs multiple genetic (sequence) protein and RNA databases to run:
 *   [RFam](https://rfam.org/)
 *   [RNACentral](https://rnacentral.org/)
 
-We provide a Python program `fetch_databases.py` that can be used to download
-and set up all of these databases. This process takes around 45 minutes when not
+We provide a bash script `fetch_databases.sh` that can be used to download and
+set up all of these databases. This process takes around 45 minutes when not
 installing on local SSD. We recommend running the following in a `screen` or
 `tmux` session as downloading and decompressing the databases takes some time.
 
 ```sh
 cd alphafold3  # Navigate to the directory with cloned AlphaFold 3 repository.
-python3 fetch_databases.py --download_destination=<DATABASES_DIR>
+./fetch_databases.sh <DB_DIR>
 ```
 
 This script downloads the databases from a mirror hosted on GCS, with all
 versions being the same as used in the AlphaFold 3 paper.
 
-:ledger: **Note: The download directory `<DATABASES_DIR>` should *not* be a
+:ledger: **Note: The download directory `<DB_DIR>` should *not* be a
 subdirectory in the AlphaFold 3 repository directory.** If it is, the Docker
 build will be slow as the large databases will be copied during the image
 creation.
@@ -221,17 +225,17 @@ creation.
 :ledger: **Note: The total download size for the full databases is around 252 GB
 and the total size when unzipped is 630 GB. Please make sure you have sufficient
 hard drive space, bandwidth, and time to download. We recommend using an SSD for
-better genetic search performance, and faster runtime of `fetch_databases.py`.**
+better genetic search performance.**
 
 :ledger: **Note: If the download directory and datasets don't have full read and
 write permissions, it can cause errors with the MSA tools, with opaque
 (external) error messages. Please ensure the required permissions are applied,
-e.g. with the `sudo chmod 755 --recursive <DATABASES_DIR>` command.**
+e.g. with the `sudo chmod 755 --recursive <DB_DIR>` command.**
 
 Once the script has finished, you should have the following directory structure:
 
 ```sh
-pdb_2022_09_28_mmcif_files.tar  # ~200k PDB mmCIF files in this tar.
+mmcif_files/  # Directory containing ~200k PDB mmCIF files.
 bfd-first_non_consensus_sequences.fasta
 mgy_clusters_2022_05.fa
 nt_rna_2023_02_23_clust_seq_id_90_cov_80_rep_seq.fasta
@@ -241,6 +245,18 @@ rnacentral_active_seq_id_90_cov_80_linclust.fasta
 uniprot_all_2021_04.fa
 uniref90_2022_05.fa
 ```
+
+Optionally, after the script finishes, you may want copy databases to an SSD.
+You can use theses two scripts:
+
+*   `src/scripts/gcp_mount_ssd.sh <SSD_MOUNT_PATH>` Mounts and formats an
+    unmounted GCP SSD drive. It will skip the either step if the disk is either
+    already formatted or already mounted. The default `<SSD_MOUNT_PATH>` is
+    `/mnt/disks/ssd`.
+*   `src/scripts/copy_to_ssd.sh <DB_DIR> <SSD_DB_DIR>` this will copy as many
+    files that it can fit on to the SSD. The default `<DATABASE_DIR>` is
+    `$HOME/public_databases` and the default `<SSD_DB_DIR>` is
+    `/mnt/disks/ssd/public_databases`.
 
 ## Obtaining Model Parameters
 
@@ -267,7 +283,7 @@ docker run -it \
     --volume $HOME/af_input:/root/af_input \
     --volume $HOME/af_output:/root/af_output \
     --volume <MODEL_PARAMETERS_DIR>:/root/models \
-    --volume <DATABASES_DIR>:/root/public_databases \
+    --volume <DB_DIR>:/root/public_databases \
     --gpus all \
     alphafold3 \
     python run_alphafold.py \
@@ -279,6 +295,27 @@ docker run -it \
 :ledger: **Note: In the example above the databases have been placed on the
 persistent disk, which is slow.** If you want better genetic and template search
 performance, make sure all databases are placed on a local SSD.
+
+If you have databases on SSD in `<SSD_DB_DIR>` you can use uses it as the
+location to look for databases but allowing for a multiple fallbacks with
+`--db_dir` which can be specified multiple times.
+
+```
+docker run -it \
+    --volume $HOME/af_input:/root/af_input \
+    --volume $HOME/af_output:/root/af_output \
+    --volume <MODEL_PARAMETERS_DIR>:/root/models \
+    --volume <SSD_DB_DIR>:/root/public_databases \
+    --volume <DB_DIR>:/root/public_databases_fallback \
+    --gpus all \
+    alphafold3 \
+    python run_alphafold.py \
+    --json_path=/root/af_input/fold_input.json \
+    --model_dir=/root/models \
+    --db_dir=/root/public_databases \
+    --db_dir=/root/public_databases_fallback \
+    --output_dir=/root/af_output
+```
 
 If you get an error like the following, make sure the models and data are in the
 paths (flags named `--volume` above) in the correct locations.
@@ -346,11 +383,30 @@ singularity exec \
      --bind $HOME/af_input:/root/af_input \
      --bind $HOME/af_output:/root/af_output \
      --bind <MODEL_PARAMETERS_DIR>:/root/models \
-     --bind <DATABASES_DIR>:/root/public_databases \
+     --bind <DB_DIR>:/root/public_databases \
      alphafold3.sif \
-     python alphafold3/run_alphafold.py \
+     python run_alphafold.py \
      --json_path=/root/af_input/fold_input.json \
      --model_dir=/root/models \
      --db_dir=/root/public_databases \
+     --output_dir=/root/af_output
+```
+
+Or with some databases on SSD in location `<SSD_DB_DIR>`:
+
+```sh
+singularity exec \
+     --nv \
+     --bind $HOME/af_input:/root/af_input \
+     --bind $HOME/af_output:/root/af_output \
+     --bind <MODEL_PARAMETERS_DIR>:/root/models \
+     --bind <SSD_DB_DIR>:/root/public_databases \
+     --bind <DB_DIR>:/root/public_databases_fallback \
+     alphafold3.sif \
+     python run_alphafold.py \
+     --json_path=/root/af_input/fold_input.json \
+     --model_dir=/root/models \
+     --db_dir=/root/public_databases \
+     --db_dir=/root/public_databases_fallback \
      --output_dir=/root/af_output
 ```

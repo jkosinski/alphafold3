@@ -23,6 +23,10 @@ RUN add-apt-repository ppa:deadsnakes/ppa \
     && DEBIAN_FRONTEND=noninteractive apt install --yes --quiet python3.11 python3-pip python3.11-venv python3.11-dev
 RUN python3.11 -m venv /alphafold3_venv
 ENV PATH="/hmmer/bin:/alphafold3_venv/bin:$PATH"
+# Update pip to the latest version. Not necessary in Docker, but good to do when
+# this is used as a recipe for local installation since we rely on new pip
+# features for secure installs.
+RUN pip3 install --upgrade pip
 
 # Install HMMER. Do so before copying the source code, so that docker can cache
 # the image layer containing HMMER.

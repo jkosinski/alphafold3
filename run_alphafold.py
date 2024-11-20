@@ -56,8 +56,8 @@ import numpy as np
 
 
 _HOME_DIR = pathlib.Path(os.environ.get('HOME'))
-DEFAULT_MODEL_DIR = _HOME_DIR / 'models'
-DEFAULT_DB_DIR = _HOME_DIR / 'public_databases'
+_DEFAULT_MODEL_DIR = _HOME_DIR / 'models'
+_DEFAULT_DB_DIR = _HOME_DIR / 'public_databases'
 
 
 # Input and output paths.
@@ -77,9 +77,9 @@ _OUTPUT_DIR = flags.DEFINE_string(
     'Path to a directory where the results will be saved.',
 )
 
-_MODEL_DIR = flags.DEFINE_string(
+MODEL_DIR = flags.DEFINE_string(
     'model_dir',
-    DEFAULT_MODEL_DIR.as_posix(),
+    _DEFAULT_MODEL_DIR.as_posix(),
     'Path to the model to use for inference.',
 )
 
@@ -137,11 +137,13 @@ _HMMBUILD_BINARY_PATH = flags.DEFINE_string(
 )
 
 # Database paths.
-_DB_DIR = flags.DEFINE_string(
+DB_DIR = flags.DEFINE_multi_string(
     'db_dir',
-    DEFAULT_DB_DIR.as_posix(),
-    'Path to the directory containing the databases.',
+    (_DEFAULT_DB_DIR.as_posix(),),
+    'Path to the directory containing the databases. Can be specified multiple'
+    ' times to search multiple directories in order.',
 )
+
 _SMALL_BFD_DATABASE_PATH = flags.DEFINE_string(
     'small_bfd_database_path',
     '${DB_DIR}/bfd-first_non_consensus_sequences.fasta',
@@ -180,7 +182,7 @@ _RNA_CENTRAL_DATABASE_PATH = flags.DEFINE_string(
 )
 _PDB_DATABASE_PATH = flags.DEFINE_string(
     'pdb_database_path',
-    '${DB_DIR}/pdb_2022_09_28_mmcif_files.tar',
+    '${DB_DIR}/mmcif_files',
     'PDB database directory with mmCIF files path, used for template search.',
 )
 _SEQRES_DATABASE_PATH = flags.DEFINE_string(
@@ -486,6 +488,22 @@ def process_fold_input(
   ...
 
 
+def replace_db_dir(path_with_db_dir: str, db_dirs: Sequence[str]) -> str:
+  """Replaces the DB_DIR placeholder in a path with the given DB_DIR."""
+  template = string.Template(path_with_db_dir)
+  if 'DB_DIR' in template.get_identifiers():
+    for db_dir in db_dirs:
+      path = template.substitute(DB_DIR=db_dir)
+      if os.path.exists(path):
+        return path
+    raise FileNotFoundError(
+        f'{path_with_db_dir} with ${{DB_DIR}} not found in any of {db_dirs}.'
+    )
+  if not os.path.exists(path_with_db_dir):
+    raise FileNotFoundError(f'{path_with_db_dir} does not exist.')
+  return path_with_db_dir
+
+
 def process_fold_input(
     fold_input: folding_input.Input,
     data_pipeline_config: pipeline.DataPipelineConfig | None,
@@ -610,6 +628,17 @@ def main(_):
     print(f'Failed to create output directory {_OUTPUT_DIR.value}: {e}')
     raise
 
+  if _RUN_INFERENCE.value:
+    # Fail early on incompatible devices, but only if we're running inference.
+    gpu_devices = jax.local_devices(backend='gpu')
+    if gpu_devices and float(gpu_devices[0].compute_capability) < 8.0:
+      raise ValueError(
+          'There are currently known unresolved numerical issues with using'
+          ' devices with compute capability less than 8.0. See '
+          ' https://github.com/google-deepmind/alphafold3/issues/59 for'
+          ' tracking.'
+      )
+
   notice = textwrap.wrap(
       'Running AlphaFold 3. Please note that standard AlphaFold 3 model'
       ' parameters are only available under terms of use provided at'
@@ -624,28 +653,24 @@ def main(_):
   print('\n'.join(notice))
 
   if _RUN_DATA_PIPELINE.value:
-    replace_db_dir = lambda x: string.Template(x).substitute(
-        DB_DIR=_DB_DIR.value
-    )
+    expand_path = lambda x: replace_db_dir(x, DB_DIR.value)
     data_pipeline_config = pipeline.DataPipelineConfig(
         jackhmmer_binary_path=_JACKHMMER_BINARY_PATH.value,
         nhmmer_binary_path=_NHMMER_BINARY_PATH.value,
         hmmalign_binary_path=_HMMALIGN_BINARY_PATH.value,
         hmmsearch_binary_path=_HMMSEARCH_BINARY_PATH.value,
         hmmbuild_binary_path=_HMMBUILD_BINARY_PATH.value,
-        small_bfd_database_path=replace_db_dir(_SMALL_BFD_DATABASE_PATH.value),
-        mgnify_database_path=replace_db_dir(_MGNIFY_DATABASE_PATH.value),
-        uniprot_cluster_annot_database_path=replace_db_dir(
+        small_bfd_database_path=expand_path(_SMALL_BFD_DATABASE_PATH.value),
+        mgnify_database_path=expand_path(_MGNIFY_DATABASE_PATH.value),
+        uniprot_cluster_annot_database_path=expand_path(
             _UNIPROT_CLUSTER_ANNOT_DATABASE_PATH.value
         ),
-        uniref90_database_path=replace_db_dir(_UNIREF90_DATABASE_PATH.value),
-        ntrna_database_path=replace_db_dir(_NTRNA_DATABASE_PATH.value),
-        rfam_database_path=replace_db_dir(_RFAM_DATABASE_PATH.value),
-        rna_central_database_path=replace_db_dir(
-            _RNA_CENTRAL_DATABASE_PATH.value
-        ),
-        pdb_database_path=replace_db_dir(_PDB_DATABASE_PATH.value),
-        seqres_database_path=replace_db_dir(_SEQRES_DATABASE_PATH.value),
+        uniref90_database_path=expand_path(_UNIREF90_DATABASE_PATH.value),
+        ntrna_database_path=expand_path(_NTRNA_DATABASE_PATH.value),
+        rfam_database_path=expand_path(_RFAM_DATABASE_PATH.value),
+        rna_central_database_path=expand_path(_RNA_CENTRAL_DATABASE_PATH.value),
+        pdb_database_path=expand_path(_PDB_DATABASE_PATH.value),
+        seqres_database_path=expand_path(_SEQRES_DATABASE_PATH.value),
         jackhmmer_n_cpu=_JACKHMMER_N_CPU.value,
         nhmmer_n_cpu=_NHMMER_N_CPU.value,
     )
@@ -666,7 +691,7 @@ def main(_):
             )
         ),
         device=devices[0],
-        model_dir=pathlib.Path(_MODEL_DIR.value),
+        model_dir=pathlib.Path(MODEL_DIR.value),
     )
   else:
     print('Skipping running model inference.')
