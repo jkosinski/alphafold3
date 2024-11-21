@@ -11,11 +11,14 @@
 FROM nvidia/cuda:12.6.0-base-ubuntu22.04
 
 # Some RUN statements are combined together to make Docker build run faster.
-# Get latest package listing, install software-properties-common, git and wget.
+# Get latest package listing, install software-properties-common, git, wget,
+# compilers and libraries.
 # git is required for pyproject.toml toolchain's use of CMakeLists.txt.
+# gcc, g++, make are required for compiling hmmer and AlphaFold 3 libaries.
+# zlib is a required dependency of AlphaFold 3.
 RUN apt update --quiet \
     && apt install --yes --quiet software-properties-common \
-    && apt install --yes --quiet git wget
+    && apt install --yes --quiet git wget gcc g++ make zlib1g-dev zstd
 
 # Get apt repository of specific Python versions. Then install Python. Tell APT
 # this isn't an interactive TTY to avoid timezone prompt when installing.
