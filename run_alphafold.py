@@ -540,6 +540,7 @@ def process_fold_input(
     model_runner: ModelRunner | None,
     output_dir: os.PathLike[str] | str,
     buckets: Sequence[int] | None = None,
+    return_all_inference_results: bool = False,
 ) -> folding_input.Input | Sequence[ResultsForSeed]:
   """Runs data pipeline and/or inference on a single fold input.
 
@@ -612,7 +613,7 @@ def process_fold_input(
 
     os.makedirs(output_dir, exist_ok=True)
 
- 
+    all_inference_results = []
     for seed, example in zip(fold_input.rng_seeds, featurised_examples):
       result = predict_structure_single(
           fold_input=fold_input,
@@ -620,6 +621,8 @@ def process_fold_input(
           seed=seed,
           model_runner=model_runner,
       )
+      if return_all_inference_results:
+        all_inference_results.append(result)
 
       writing_start_time = time.time()
       for sample_idx, inference_result in enumerate(result.inference_results):
@@ -661,9 +664,10 @@ def process_fold_input(
         f'{fold_input.rng_seeds} took '
         f'{time.time() - all_inference_start_time:.2f} seconds.'
     )
+    output = all_inference_results
 
   print(f'Done processing fold input {fold_input.name}.')
-
+  return output
 
 def set_seeds(fold_input: folding_input.Input, num_seeds: int) -> folding_input.Input:
     """Sets the random seeds for the fold input."""
